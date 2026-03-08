@@ -15,6 +15,9 @@ import de.robv.android.xposed.XposedHelpers.setObjectField
 import de.robv.android.xposed.callbacks.XC_LoadPackage
 import io.github.auag0.hidemocklocation.XposedUtils.invokeOriginalMethod
 
+import de.robv.android.xposed.XposedBridge
+import de.robv.android.xposed.XposedHelpers
+
 class Main : IXposedHookLoadPackage {
     override fun handleLoadPackage(lpparam: XC_LoadPackage.LoadPackageParam) {
         hookLocationMethods(lpparam.classLoader)
