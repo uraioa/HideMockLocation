@@ -21,6 +21,58 @@ class Main : IXposedHookLoadPackage {
         if (lpparam.packageName != "android") {
             hookSettingsMethods(lpparam.classLoader)
         }
+
+        if (lpparam.packageName == "com.oplus.engineernetwork") {
+            hookOplusNetworkMethods(lpparam.classLoader)
+        }
+        
+    }
+    
+    private fun hookOplusNetworkMethods(classLoader: ClassLoader) {
+        // 1. Hook Companion.getMIsEncrypt (Getter 拦截)
+        try {
+            XposedHelpers.findAndHookMethod(
+                "com.oplus.engineernetwork.HostApplication\$Companion",
+                classLoader,
+                "getMIsEncrypt",
+                object : XC_MethodHook() {
+                    override fun beforeHookedMethod(param: MethodHookParam) {
+                        param.result = false
+                    }
+                }
+            )
+        } catch (e: Throwable) { XposedBridge.log("Hook getMIsEncrypt 失败: ${e.message}") }
+
+        // 2. Hook MainActivity.setDecryptionResult (状态修正)
+        try {
+            XposedHelpers.findAndHookMethod(
+                "com.oplus.engineernetwork.MainActivity",
+                classLoader,
+                "setDecryptionResult",
+                object : XC_MethodHook() {
+                    override fun afterHookedMethod(param: MethodHookParam) {
+                        XposedHelpers.setBooleanField(param.thisObject, "mIsEncrypt", false)
+                    }
+                }
+            )
+        } catch (e: Throwable) { XposedBridge.log("Hook setDecryptionResult 失败: ${e.message}") }
+
+        // 3. Hook HostApplication.onCreate (初始化抢占)
+        try {
+            XposedHelpers.findAndHookMethod(
+                "com.oplus.engineernetwork.HostApplication",
+                classLoader,
+                "onCreate",
+                object : XC_MethodHook() {
+                    override fun afterHookedMethod(param: MethodHookParam) {
+                        val companionClass = XposedHelpers.findClass("com.oplus.engineernetwork.HostApplication\$Companion", classLoader)
+                        val companionInstance = XposedHelpers.getStaticObjectField(companionClass, "INSTANCE")
+                        XposedHelpers.callMethod(companionInstance, "setMIsEncrypt", false)
+                        XposedBridge.log("OplusEngineerNetworkHook: onCreate 抢占式状态重置完成")
+                    }
+                }
+            )
+        } catch (e: Throwable) { XposedBridge.log("Hook onCreate 失败: ${e.message}") }
     }
 
     private fun hookLocationMethods(classLoader: ClassLoader) {
