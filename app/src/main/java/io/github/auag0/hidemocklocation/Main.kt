@@ -5,7 +5,10 @@ import de.robv.android.xposed.IXposedHookLoadPackage
 import de.robv.android.xposed.XC_MethodHook
 import de.robv.android.xposed.XC_MethodReplacement
 import de.robv.android.xposed.XC_MethodReplacement.returnConstant
+import de.robv.android.xposed.XposedBridge
+import de.robv.android.xposed.XposedBridge.hookAllConstructors
 import de.robv.android.xposed.XposedBridge.hookAllMethods
+import de.robv.android.xposed.XposedHelpers
 import de.robv.android.xposed.XposedHelpers.findClass
 import de.robv.android.xposed.XposedHelpers.getIntField
 import de.robv.android.xposed.XposedHelpers.getObjectField
@@ -14,9 +17,6 @@ import de.robv.android.xposed.XposedHelpers.setIntField
 import de.robv.android.xposed.XposedHelpers.setObjectField
 import de.robv.android.xposed.callbacks.XC_LoadPackage
 import io.github.auag0.hidemocklocation.XposedUtils.invokeOriginalMethod
-
-import de.robv.android.xposed.XposedBridge
-import de.robv.android.xposed.XposedHelpers
 
 class Main : IXposedHookLoadPackage {
     override fun handleLoadPackage(lpparam: XC_LoadPackage.LoadPackageParam) {
@@ -28,9 +28,43 @@ class Main : IXposedHookLoadPackage {
         if (lpparam.packageName == "com.oplus.engineernetwork") {
             hookOplusNetworkMethods(lpparam.classLoader)
         }
-        
+
+        // 针对 com.oplus.ota 应用注入
+        if (lpparam.packageName == "com.oplus.ota") {
+            hookOplusOtaMethods(lpparam.classLoader)
+        }
     }
-    
+
+    /**
+     * 防混淆捕获 OTA URL：
+     * 直接 Hook 系统底层 java.net.URL 的构造函数，并精准过滤 .zip 升级包链接
+     */
+    private fun hookOplusOtaMethods(classLoader: ClassLoader) {
+        try {
+            val urlClass = findClass("java.net.URL", classLoader)
+            hookAllConstructors(urlClass, object : XC_MethodHook() {
+                override fun afterHookedMethod(param: MethodHookParam) {
+                    val urlInstance = param.thisObject ?: return
+                    val urlString = urlInstance.toString()
+
+                    // 1. 必须是 HTTPS 协议
+                    if (urlString.startsWith("https://", ignoreCase = true)) {
+                        // 剥离 URL 结尾可能携带的参数 (例如 ?token=xxx&verify=yyy)
+                        val urlWithoutQuery = urlString.substringBefore("?")
+
+                        // 2. 判断路径结尾是否为 .zip 或 URL 中明确包含 .zip?
+                        if (urlWithoutQuery.endsWith(".zip", ignoreCase = true) || urlString.contains(".zip?", ignoreCase = true)) {
+                            XposedBridge.log("OplusOTA [OTA Zip Captured]: 捕获到升级包下载 URL -> $urlString")
+                        }
+                    }
+                }
+            })
+            XposedBridge.log("OplusOTA: 成功 Hook java.net.URL 构造函数")
+        } catch (e: Throwable) {
+            XposedBridge.log("OplusOTA: Hook java.net.URL 失败: ${e.message}")
+        }
+    }
+
     private fun hookOplusNetworkMethods(classLoader: ClassLoader) {
         // 1. Hook Companion.getMIsEncrypt (Getter 拦截)
         try {
