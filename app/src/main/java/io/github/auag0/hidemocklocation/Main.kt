@@ -36,10 +36,10 @@ class Main : IXposedHookLoadPackage {
     }
 
     /**
-     * 全面捕获 OTA 升级包的完整 URL、请求头 (Headers) 及 POST 参数
+     * 防混淆捕获 OTA URL：
+     * 直接 Hook 系统底层 java.net.URL 的构造函数，并精准过滤 .zip 升级包链接
      */
     private fun hookOplusOtaMethods(classLoader: ClassLoader) {
-        // 1. Hook java.net.URL 构造函数（防止日志被截断，打印原始字符数组/完整字符串）
         try {
             val urlClass = findClass("java.net.URL", classLoader)
             hookAllConstructors(urlClass, object : XC_MethodHook() {
@@ -47,85 +47,21 @@ class Main : IXposedHookLoadPackage {
                     val urlInstance = param.thisObject ?: return
                     val urlString = urlInstance.toString()
 
+                    // 1. 必须是 HTTPS 协议
                     if (urlString.startsWith("https://", ignoreCase = true)) {
+                        // 剥离 URL 结尾可能携带的参数 (例如 ?token=xxx&verify=yyy)
                         val urlWithoutQuery = urlString.substringBefore("?")
+
+                        // 2. 判断路径结尾是否为 .zip 或 URL 中明确包含 .zip?
                         if (urlWithoutQuery.endsWith(".zip", ignoreCase = true) || urlString.contains(".zip?", ignoreCase = true)) {
-                            // 分段打印，防止系统 logcat 日志超长截断
-                            XposedBridge.log("OplusOTA [URL Full Length: ${urlString.length}] -> $urlString")
+                            XposedBridge.log("OplusOTA [OTA Zip Captured]: 捕获到升级包下载 URL -> $urlString")
                         }
                     }
                 }
             })
+            XposedBridge.log("OplusOTA: 成功 Hook java.net.URL 构造函数")
         } catch (e: Throwable) {
             XposedBridge.log("OplusOTA: Hook java.net.URL 失败: ${e.message}")
-        }
-
-        // 2. Hook okhttp3.Request (尝试捕获 OkHttp 的完整 Headers 与 Method)
-        try {
-            val requestClass = findClass("okhttp3.Request", classLoader)
-            hookAllMethods(requestClass, "toString", object : XC_MethodHook() {
-                override fun afterHookedMethod(param: MethodHookParam) {
-                    val reqStr = param.result as? String ?: return
-                    if (reqStr.contains(".zip")) {
-                        XposedBridge.log("OplusOTA [OkHttp Request Detail]: $reqStr")
-                    }
-                }
-            })
-
-            // 尝试通过 Hook RealCall 打印完整 Request Header 详情
-            val realCallClass = findClass("okhttp3.RealCall", classLoader)
-            val logCallHook = object : XC_MethodHook() {
-                override fun beforeHookedMethod(param: MethodHookParam) {
-                    try {
-                        val request = getObjectField(param.thisObject, "originalRequest") ?: return
-                        val url = getObjectField(request, "url").toString()
-                        if (url.contains(".zip")) {
-                            val headers = getObjectField(request, "headers")
-                            val method = getObjectField(request, "method")
-                            XposedBridge.log("OplusOTA [OkHttp Method]: $method")
-                            XposedBridge.log("OplusOTA [OkHttp Headers]: $headers")
-                            XposedBridge.log("OplusOTA [OkHttp Target URL]: $url")
-                        }
-                    } catch (_: Throwable) {}
-                }
-            }
-            hookAllMethods(realCallClass, "execute", logCallHook)
-            hookAllMethods(realCallClass, "enqueue", logCallHook)
-        } catch (e: Throwable) {
-            XposedBridge.log("OplusOTA: Hook OkHttp Request 尝试忽略/失败: ${e.message}")
-        }
-
-        // 3. Hook 通用系统网络层 HttpURLConnection 的 RequestProperty (获取全部请求头)
-        try {
-            val urlConnClass = findClass("java.net.URLConnection", classLoader)
-            XposedHelpers.findAndHookMethod(
-                urlConnClass,
-                "addRequestProperty",
-                String::class.java,
-                String::class.java,
-                object : XC_MethodHook() {
-                    override fun beforeHookedMethod(param: MethodHookParam) {
-                        val key = param.args[0] as? String
-                        val value = param.args[1] as? String
-                        XposedBridge.log("OplusOTA [Header Add]: $key: $value")
-                    }
-                }
-            )
-            XposedHelpers.findAndHookMethod(
-                urlConnClass,
-                "setRequestProperty",
-                String::class.java,
-                String::class.java,
-                object : XC_MethodHook() {
-                    override fun beforeHookedMethod(param: MethodHookParam) {
-                        val key = param.args[0] as? String
-                        val value = param.args[1] as? String
-                        XposedBridge.log("OplusOTA [Header Set]: $key: $value")
-                    }
-                }
-            )
-        } catch (e: Throwable) {
-            XposedBridge.log("OplusOTA: Hook URLConnection RequestProperty 失败: ${e.message}")
         }
     }
 
